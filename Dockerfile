@@ -5,6 +5,6 @@ ADD . /go/src/willnorris.com/go/imageproxy
 RUN go get willnorris.com/go/imageproxy/cmd/imageproxy
 
 ENTRYPOINT ["/go/bin/imageproxy"]
-CMD ["-addr", "0.0.0.0:8080"]
+CMD ["-addr", "0.0.0.0:8080", "-cache", "/tmp/imageproxy"]
 
 EXPOSE 8080
