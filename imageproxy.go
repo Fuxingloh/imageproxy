@@ -32,6 +32,7 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/gregjones/httpcache"
+	tphttp "willnorris.com/go/imageproxy/third_party/http"
 )
 
 // Proxy serves image requests.
@@ -58,6 +59,11 @@ type Proxy struct {
 
 	// Allow images to scale beyond their original dimensions.
 	ScaleUp bool
+
+	// Timeout specifies a time limit for requests served by this Proxy.
+	// If a call runs for longer than its time limit, a 504 Gateway Timeout
+	// response is returned.  A Timeout of zero means no timeout.
+	Timeout time.Duration
 }
 
 // NewProxy constructs a new proxy.  The provided http RoundTripper will be
@@ -87,7 +93,7 @@ func NewProxy(transport http.RoundTripper, cache Cache) *Proxy {
 	return &proxy
 }
 
-// ServeHTTP handles image requests.
+// ServeHTTP handles incoming requests.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/favicon.ico" {
 		return // ignore favicon requests
@@ -98,6 +104,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var h http.Handler = http.HandlerFunc(p.serveImage)
+	if p.Timeout > 0 {
+		h = tphttp.TimeoutHandler(h, p.Timeout, "Gateway timeout waiting for remote resource.")
+	}
+	h.ServeHTTP(w, r)
+}
+
+// serveImage handles incoming requests for proxied images.
+func (p *Proxy) serveImage(w http.ResponseWriter, r *http.Request) {
 	req, err := NewRequest(r, p.DefaultBaseURL)
 	if err != nil {
 		msg := fmt.Sprintf("invalid request URL: %v", err)
@@ -127,27 +142,36 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cached := resp.Header.Get(httpcache.XFromCache)
 	glog.Infof("request: %v (served from cache: %v)", *req, cached == "1")
 
-	copyHeader(w, resp, "Cache-Control")
-	copyHeader(w, resp, "Last-Modified")
-	copyHeader(w, resp, "Expires")
-	copyHeader(w, resp, "Etag")
-	copyHeader(w, resp, "Link")
+	copyHeader(w.Header(), resp.Header, "Cache-Control", "Last-Modified", "Expires", "Etag", "Link")
 
-	if is304 := check304(r, resp); is304 {
+	if should304(r, resp) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
-	copyHeader(w, resp, "Content-Length")
-	copyHeader(w, resp, "Content-Type")
+	copyHeader(w.Header(), resp.Header, "Content-Length", "Content-Type")
+
+	//Enable CORS for 3rd party applications
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
 
-func copyHeader(w http.ResponseWriter, r *http.Response, header string) {
-	key := http.CanonicalHeaderKey(header)
-	if value, ok := r.Header[key]; ok {
-		w.Header()[key] = value
+// copyHeader copies header values from src to dst, adding to any existing
+// values with the same header name.  If keys is not empty, only those header
+// keys will be copied.
+func copyHeader(dst, src http.Header, keys ...string) {
+	if len(keys) == 0 {
+		for k, _ := range src {
+			keys = append(keys, k)
+		}
+	}
+	for _, key := range keys {
+		k := http.CanonicalHeaderKey(key)
+		for _, v := range src[k] {
+			dst.Add(k, v)
+		}
 	}
 }
 
@@ -218,10 +242,10 @@ func validSignature(key []byte, r *Request) bool {
 	return hmac.Equal(got, want)
 }
 
-// check304 checks whether we should send a 304 Not Modified in response to
+// should304 returns whether we should send a 304 Not Modified in response to
 // req, based on the response resp.  This is determined using the last modified
 // time and the entity tag of resp.
-func check304(req *http.Request, resp *http.Response) bool {
+func should304(req *http.Request, resp *http.Response) bool {
 	// TODO(willnorris): if-none-match header can be a comma separated list
 	// of multiple tags to be matched, or the special value "*" which
 	// matches all etags
@@ -274,6 +298,11 @@ func (t *TransformingTransport) RoundTrip(req *http.Request) (*http.Response, er
 		return nil, err
 	}
 
+	if should304(req, resp) {
+		// bare 304 response, full response will be used from cache
+		return &http.Response{StatusCode: http.StatusNotModified}, nil
+	}
+
 	defer resp.Body.Close()
 	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -291,7 +320,11 @@ func (t *TransformingTransport) RoundTrip(req *http.Request) (*http.Response, er
 	// replay response with transformed image and updated content length
 	buf := new(bytes.Buffer)
 	fmt.Fprintf(buf, "%s %s\n", resp.Proto, resp.Status)
-	resp.Header.WriteSubset(buf, map[string]bool{"Content-Length": true})
+	resp.Header.WriteSubset(buf, map[string]bool{
+		"Content-Length": true,
+		// exclude Content-Type header if the format may have changed during transformation
+		"Content-Type": opt.Format != "" || resp.Header.Get("Content-Type") == "image/webp",
+	})
 	fmt.Fprintf(buf, "Content-Length: %d\n\n", len(img))
 	buf.Write(img)
 

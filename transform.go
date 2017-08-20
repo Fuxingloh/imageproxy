@@ -16,12 +16,14 @@ package imageproxy
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	_ "image/gif" // register gif format
 	"image/jpeg"
 	"image/png"
 
 	"github.com/disintegration/imaging"
+	_ "golang.org/x/image/webp" // register webp format
 	"willnorris.com/go/gifresize"
 )
 
@@ -46,6 +48,10 @@ func Transform(img []byte, opt Options) ([]byte, error) {
 		return nil, err
 	}
 
+	if opt.Format != "" {
+		format = opt.Format
+	}
+
 	// transform and encode image
 	buf := new(bytes.Buffer)
 	switch format {
@@ -57,7 +63,7 @@ func Transform(img []byte, opt Options) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-	case "jpeg":
+	case "jpeg", "webp": // default to encoding webp as jpeg
 		quality := opt.Quality
 		if quality == 0 {
 			quality = defaultQuality
@@ -74,6 +80,8 @@ func Transform(img []byte, opt Options) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+	default:
+		return nil, fmt.Errorf("unsupported format: %v", format)
 	}
 
 	return buf.Bytes(), nil

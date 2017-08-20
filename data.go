@@ -15,7 +15,6 @@
 package imageproxy
 
 import (
-	"bytes"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -28,6 +27,8 @@ const (
 	optFit             = "fit"
 	optFlipVertical    = "fv"
 	optFlipHorizontal  = "fh"
+	optFormatJPEG      = "jpeg"
+	optFormatPNG       = "png"
 	optRotatePrefix    = "r"
 	optQualityPrefix   = "q"
 	optSignaturePrefix = "s"
@@ -71,44 +72,51 @@ type Options struct {
 	// Allow image to scale beyond its original dimensions.  This value
 	// will always be overwritten by the value of Proxy.ScaleUp.
 	ScaleUp bool
+
+	// Desired image format. Valid values are "jpeg", "png".
+	Format string
 }
 
 func (o Options) String() string {
-	buf := new(bytes.Buffer)
-	fmt.Fprintf(buf, "%v%s%v", o.Width, optSizeDelimiter, o.Height)
+	opts := []string{fmt.Sprintf("%v%s%v", o.Width, optSizeDelimiter, o.Height)}
 	if o.Fit {
-		fmt.Fprintf(buf, ",%s", optFit)
+		opts = append(opts, optFit)
 	}
 	if o.Rotate != 0 {
-		fmt.Fprintf(buf, ",%s%d", string(optRotatePrefix), o.Rotate)
+		opts = append(opts, fmt.Sprintf("%s%d", string(optRotatePrefix), o.Rotate))
 	}
 	if o.FlipVertical {
-		fmt.Fprintf(buf, ",%s", optFlipVertical)
+		opts = append(opts, optFlipVertical)
 	}
 	if o.FlipHorizontal {
-		fmt.Fprintf(buf, ",%s", optFlipHorizontal)
+		opts = append(opts, optFlipHorizontal)
 	}
 	if o.Quality != 0 {
-		fmt.Fprintf(buf, ",%s%d", string(optQualityPrefix), o.Quality)
+		opts = append(opts, fmt.Sprintf("%s%d", string(optQualityPrefix), o.Quality))
 	}
 	if o.Signature != "" {
-		fmt.Fprintf(buf, ",%s%s", string(optSignaturePrefix), o.Signature)
+		opts = append(opts, fmt.Sprintf("%s%s", string(optSignaturePrefix), o.Signature))
 	}
 	if o.ScaleUp {
-		fmt.Fprintf(buf, ",%s", optScaleUp)
+		opts = append(opts, optScaleUp)
 	}
-	return buf.String()
+	if o.Format != "" {
+		opts = append(opts, o.Format)
+	}
+	return strings.Join(opts, ",")
 }
 
 // transform returns whether o includes transformation options.  Some fields
 // are not transform related at all (like Signature), and others only apply in
-// the presence of other fields (like Fit and Quality).
+// the presence of other fields (like Fit).  A non-empty Format value is
+// assumed to involve a transformation.
 func (o Options) transform() bool {
-	return o.Width != 0 || o.Height != 0 || o.Rotate != 0 || o.FlipHorizontal || o.FlipVertical
+	return o.Width != 0 || o.Height != 0 || o.Rotate != 0 || o.FlipHorizontal || o.FlipVertical || o.Quality != 0 || o.Format != ""
 }
 
 // ParseOptions parses str as a list of comma separated transformation options.
-// The following options can be specified in any order:
+// The options can be specified in in order, with duplicate options overwriting
+// previous values.
 //
 // Size and Cropping
 //
@@ -150,7 +158,21 @@ func (o Options) transform() bool {
 // Quality
 //
 // The "q{qualityPercentage}" option can be used to specify the quality of the
-// output file (JPEG only)
+// output file (JPEG only). If not specified, the default value of "95" is used.
+//
+// Format
+//
+// The "jpeg" and "png" options can be used to specify the desired image format
+// of the proxied image.
+//
+// Signature
+//
+// The "s{signature}" option specifies an optional base64 encoded HMAC used to
+// sign the remote URL in the request.  The HMAC key used to verify signatures is
+// provided to the imageproxy server on startup.
+//
+// See https://github.com/willnorris/imageproxy/wiki/URL-signing
+// for examples of generating signatures.
 //
 // Examples
 //
@@ -164,6 +186,7 @@ func (o Options) transform() bool {
 // 	100,r90   - 100 pixels square, rotated 90 degrees
 // 	100,fv,fh - 100 pixels square, flipped horizontal and vertical
 // 	200x,q80  - 200 pixels wide, proportional height, 80% quality
+// 	200x,png  - 200 pixels wide, converted to PNG format
 func ParseOptions(str string) Options {
 	var options Options
 
@@ -179,6 +202,8 @@ func ParseOptions(str string) Options {
 			options.FlipHorizontal = true
 		case opt == optScaleUp: // this option is intentionally not documented above
 			options.ScaleUp = true
+		case opt == optFormatJPEG, opt == optFormatPNG:
+			options.Format = opt
 		case strings.HasPrefix(opt, optRotatePrefix):
 			value := strings.TrimPrefix(opt, optRotatePrefix)
 			options.Rotate, _ = strconv.Atoi(value)

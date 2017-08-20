@@ -4,7 +4,7 @@ imageproxy is a caching image proxy server written in go.  It features:
 
  - basic image adjustments like resizing, cropping, and rotation
  - access control using host whitelists or request signing (HMAC-SHA256)
- - support for jpeg, png, and gif image formats (including animated gifs)
+ - support for jpeg, png, webp (decode only), and gif image formats (including animated gifs)
  - on-disk caching, respecting the cache headers of the original images
  - easy deployment, since it's pure go
 
@@ -23,66 +23,13 @@ imageproxy URLs are of the form `http://localhost/{options}/{remote_url}`.
 
 ### Options ###
 
-Options are specified as a comma delimited list of parameters, which can be
-supplied in any order.  Duplicate parameters overwrite previous values.
+Options are available for resizing, rotation, flipping, and digital signatures
+among a few others.  Options for are specified as a comma delimited list of
+parameters, which can be supplied in any order.  Duplicate parameters overwrite
+previous values.
 
-The format is a superset of [resize.ly's options](https://resize.ly/#demo).
-
-#### Size ####
-
-The size option takes the general form `{width}x{height}`, where width and
-height are numbers.  Integer values greater than 1 are interpreted as exact
-pixel values.  Floats between 0 and 1 are interpreted as percentages of the
-original image size.  If either value is omitted or set to 0, it will be
-automatically set to preserve the aspect ratio based on the other dimension.
-If a single number is provided (with no "x" separator), it will be used for
-both height and width.
-
-#### Crop Mode ####
-
-Depending on the options specified, an image may be cropped to fit the
-requested size.  In all cases, the original aspect ratio of the image will be
-preserved; imageproxy will never stretch the original image.
-
-When no explicit crop mode is specified, the following rules are followed:
-
- - If both width and height values are specified, the image will be scaled to
-   fill the space, cropping if necessary to fit the exact dimension.
-
- - If only one of the width or height values is specified, the image will be
-   resized to fit the specified dimension, scaling the other dimension as
-   needed to maintain the aspect ratio.
-
-If the `fit` option is specified together with a width and height value, the
-image will be resized to fit within a containing box of the specified size.  As
-always, the original aspect ratio will be preserved. Specifying the `fit`
-option with only one of either width or height does the same thing as if `fit`
-had not been specified.
-
-#### Rotate ####
-
-The `r{degrees}` option will rotate the image the specified number of degrees,
-counter-clockwise.  Valid degrees values are `90`, `180`, and `270`.  Images
-are rotated **after** being resized.
-
-#### Flip ####
-
-The `fv` option will flip the image vertically.  The `fh` option will flip the
-image horizontally.  Images are flipped **after** being resized and rotated.
-
-#### Quality ####
-
-The `q{percentage}` option can be used to specify the output quality (JPEG
-only).  If not specified, the default value of `95` is used.
-
-#### Signature ####
-
-The `s{signature}` option specifies an optional base64 encoded HMAC used to
-sign the remote URL in the request.  The HMAC key used to verify signatures is
-provided to the imageproxy server on startup.
-
-See [URL Signing](https://github.com/willnorris/imageproxy/wiki/URL-signing)
-for examples of generating signatures.
+See the full list of available options at
+<https://godoc.org/willnorris.com/go/imageproxy#ParseOptions>.
 
 ### Remote URL ###
 
@@ -250,6 +197,15 @@ However, you can use the `scaleUp` command-line flag to allow this to happen:
 
     imageproxy -scaleUp true
 
+### WebP support ###
+
+Imageproxy can proxy remote webp images, but they will be served in either jpeg
+or png format (this is because the golang webp library only support decoding)
+if any transformation is requested.  If no format is specified, imageproxy will
+use jpeg by default.  If no transformation is requested (for example, if you
+are just using imageproxy as an SSL proxy) then the original webp image will be
+served as-is without any format conversion.
+
 ## Deploying ##
 
 You can build and deploy imageproxy using any standard go toolchain, but here's
@@ -277,12 +233,12 @@ my server and start it using `sudo service imageproxy start`.  You will
 certainly want to modify that upstart script to suit your desired
 configuration.
 
-## Deploying to Heroku ##
+### Heroku ###
 
 It's easy to vendorize the dependencies with `Godep` and deploy to Heroku. Take
 a look at [this GitHub repo](https://github.com/oreillymedia/prototype-imageproxy)
 
-## Docker ##
+### Docker ###
 
 A docker image is available at [`willnorris/imageproxy`](https://registry.hub.docker.com/u/willnorris/imageproxy/dockerfile/).
 
@@ -297,7 +253,7 @@ Or in your Dockerfile:
 ENTRYPOINT ["/go/bin/imageproxy", "-addr 0.0.0.0:8080"]
 ```
 
-## nginx
+### nginx ###
 
 You can use follow config to prevent URL overwritting:
 
